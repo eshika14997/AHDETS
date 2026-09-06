@@ -195,24 +195,31 @@ def edf_schedule(
 
 def calculate_adaptive_weights(nodes):
     """
-    Calculate AHDETS weights based on current system conditions.
+    Calculate adaptive AHDETS weights based on
+    current average system energy and utilization.
 
-    Returns weights for:
-    - deadline urgency
-    - execution speed
-    - spare capacity
-    - residual energy
+    Base weights:
+    - Deadline urgency: 0.40
+    - Execution efficiency: 0.25
+    - Spare capacity: 0.20
+    - Residual energy: 0.15
+
+    The weights are adjusted continuously:
+    - Higher utilization increases the importance of capacity.
+    - Lower residual energy increases the importance of energy.
     """
 
     if not nodes:
         raise ValueError("At least one node is required.")
 
     # Average residual energy
-    average_energy = sum(
+    energy_levels = [
         node.energy / node.initial_energy
         if node.initial_energy > 0 else 0.0
         for node in nodes
-    ) / len(nodes)
+    ]
+
+    average_energy = sum(energy_levels) / len(energy_levels)
 
     # Average utilization
     utilizations = [
@@ -222,32 +229,64 @@ def calculate_adaptive_weights(nodes):
 
     average_utilization = sum(utilizations) / len(utilizations)
 
+    # ---------------------------------------------------------
     # Base weights
+    # ---------------------------------------------------------
+
     deadline_weight = 0.40
     execution_weight = 0.25
     capacity_weight = 0.20
     energy_weight = 0.15
 
-    # Adapt to low-energy condition
-    if average_energy < 0.30:
-        energy_weight += 0.15
-        deadline_weight -= 0.05
-        execution_weight -= 0.05
-        capacity_weight -= 0.05
+    # ---------------------------------------------------------
+    # Adaptive adjustment
+    # ---------------------------------------------------------
 
-    # Adapt to high-utilization condition
-    if average_utilization > 0.80:
-        capacity_weight += 0.15
-        deadline_weight -= 0.05
-        execution_weight -= 0.05
-        energy_weight -= 0.05
+    # As utilization increases, give more importance
+    # to spare capacity.
+    capacity_adjustment = 0.15 * average_utilization
+
+    # As energy decreases, give more importance
+    # to residual energy.
+    energy_adjustment = 0.15 * (1.0 - average_energy)
+
+    capacity_weight += capacity_adjustment
+    energy_weight += energy_adjustment
+
+    # Take the additional weight proportionally
+    # from deadline and execution factors.
+    total_adjustment = (
+        capacity_adjustment +
+        energy_adjustment
+    )
+
+    deadline_reduction = (
+        total_adjustment * 0.60
+    )
+
+    execution_reduction = (
+        total_adjustment * 0.40
+    )
+
+    deadline_weight -= deadline_reduction
+    execution_weight -= execution_reduction
+
+    # ---------------------------------------------------------
+    # Safety: prevent negative weights
+    # ---------------------------------------------------------
 
     weights = {
-        "deadline": deadline_weight,
-        "execution": execution_weight,
-        "capacity": capacity_weight,
-        "energy": energy_weight
+        "deadline": max(deadline_weight, 0.0),
+        "execution": max(execution_weight, 0.0),
+        "capacity": max(capacity_weight, 0.0),
+        "energy": max(energy_weight, 0.0)
     }
+
+    # Normalize so weights sum exactly to 1
+    total = sum(weights.values())
+
+    for key in weights:
+        weights[key] /= total
 
     return weights
 
