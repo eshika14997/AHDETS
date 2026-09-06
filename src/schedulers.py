@@ -290,20 +290,86 @@ def calculate_adaptive_weights(nodes):
 
     return weights
 
-def ahdets_schedule(tasks, nodes, weights=None):
+def ahdets_schedule(
+    tasks,
+    nodes,
+    weights=None,
+    enabled_factors=None
+):
     """
     AHDETS scheduling with adaptive weights.
 
-    Considers:
-    1. Deadline urgency
-    2. Execution efficiency
-    3. Spare capacity
-    4. Residual energy
+    Parameters
+    ----------
+    tasks : list of Task
+        Tasks to schedule.
+
+    nodes : list of EdgeNode
+        Available heterogeneous edge nodes.
+
+    weights : dict, optional
+        Fixed weights for the four AHDETS factors.
+        If None, adaptive weights are calculated.
+
+    enabled_factors : set/list/tuple, optional
+        Factors to include in the heuristic.
+
+        Valid factors:
+            "deadline"
+            "execution"
+            "capacity"
+            "energy"
+
+        If None, all four factors are enabled.
+
+    Returns
+    -------
+    list of (task_id, node_id)
+        Task-to-node assignments.
     """
 
     import copy
 
+    # -------------------------------------------------------------
+    # Default: all AHDETS factors enabled.
+    # -------------------------------------------------------------
+
+    if enabled_factors is None:
+        enabled_factors = {
+            "deadline",
+            "execution",
+            "capacity",
+            "energy"
+        }
+    else:
+        enabled_factors = set(enabled_factors)
+
+    valid_factors = {
+        "deadline",
+        "execution",
+        "capacity",
+        "energy"
+    }
+
+    invalid_factors = enabled_factors - valid_factors
+
+    if invalid_factors:
+        raise ValueError(
+            f"Invalid AHDETS factors: {invalid_factors}"
+        )
+
+    if not enabled_factors:
+        raise ValueError(
+            "At least one AHDETS factor must be enabled."
+        )
+
+    # -------------------------------------------------------------
+    # Work on a copy so the scheduler does not modify the
+    # original node state.
+    # -------------------------------------------------------------
+
     working_nodes = copy.deepcopy(nodes)
+
     assignments = []
 
     sorted_tasks = sorted(
@@ -311,38 +377,80 @@ def ahdets_schedule(tasks, nodes, weights=None):
         key=lambda task: task.arrival_time
     )
 
+    # -------------------------------------------------------------
+    # Schedule tasks.
+    # -------------------------------------------------------------
+
     for task in sorted_tasks:
+
+        # ---------------------------------------------------------
+        # Calculate adaptive weights.
+        # ---------------------------------------------------------
 
         if weights is None:
             adaptive_weights = calculate_adaptive_weights(
                 working_nodes
             )
         else:
-            adaptive_weights = weights
+            adaptive_weights = weights.copy()
+
+        # ---------------------------------------------------------
+        # Disable weights for factors excluded from the ablation.
+        # ---------------------------------------------------------
+
+        for factor in valid_factors - enabled_factors:
+            adaptive_weights[factor] = 0.0
+
+        # ---------------------------------------------------------
+        # Renormalize remaining weights so they sum to 1.
+        # ---------------------------------------------------------
+
+        weight_total = sum(adaptive_weights.values())
+
+        if weight_total <= 0:
+            raise ValueError(
+                "Enabled AHDETS factors have zero total weight."
+            )
+
+        for factor in adaptive_weights:
+            adaptive_weights[factor] /= weight_total
+
+        # ---------------------------------------------------------
+        # Calculate candidate-node factors.
+        # ---------------------------------------------------------
 
         candidates = []
 
         for node in working_nodes:
 
-            # Time required by this node
+            # -----------------------------------------------------
+            # Execution time
+            # -----------------------------------------------------
+
             execution_time = node.execution_time(
                 task.length
             )
 
-            # When this node can start the task
+            # -----------------------------------------------------
+            # Start time
+            # -----------------------------------------------------
+
             start_time = max(
                 task.arrival_time,
                 node.available_time
             )
 
-            # Predicted completion time
+            # -----------------------------------------------------
+            # Predicted finish time
+            # -----------------------------------------------------
+
             predicted_finish = (
                 start_time + execution_time
             )
 
-            # -------------------------------------------------
-            # 1. Deadline factor
-            # -------------------------------------------------
+            # -----------------------------------------------------
+            # 1. Deadline urgency
+            # -----------------------------------------------------
 
             deadline_slack = (
                 task.deadline - predicted_finish
@@ -359,18 +467,18 @@ def ahdets_schedule(tasks, nodes, weights=None):
                     (1.0 + abs(deadline_slack))
                 )
 
-            # -------------------------------------------------
+            # -----------------------------------------------------
             # 2. Execution efficiency
-            # -------------------------------------------------
+            # -----------------------------------------------------
 
             execution_factor = (
                 1.0 /
                 max(execution_time, 0.001)
             )
 
-            # -------------------------------------------------
+            # -----------------------------------------------------
             # 3. Spare capacity
-            # -------------------------------------------------
+            # -----------------------------------------------------
 
             utilization = node.utilization(
                 max(start_time, 0.001)
@@ -378,9 +486,9 @@ def ahdets_schedule(tasks, nodes, weights=None):
 
             spare_capacity = 1.0 - utilization
 
-            # -------------------------------------------------
+            # -----------------------------------------------------
             # 4. Residual energy
-            # -------------------------------------------------
+            # -----------------------------------------------------
 
             if node.initial_energy > 0:
                 residual_energy = (
@@ -398,16 +506,11 @@ def ahdets_schedule(tasks, nodes, weights=None):
                 "energy": residual_energy
             })
 
-        # -----------------------------------------------------
-        # Normalize factors across candidate nodes
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Normalize each factor across candidate nodes.
+        # ---------------------------------------------------------
 
-        for factor in [
-            "deadline",
-            "execution",
-            "capacity",
-            "energy"
-        ]:
+        for factor in valid_factors:
 
             values = [
                 candidate[factor]
@@ -435,9 +538,9 @@ def ahdets_schedule(tasks, nodes, weights=None):
                         max_value - min_value
                     )
 
-        # -----------------------------------------------------
-        # Calculate weighted AHDETS score
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Calculate weighted AHDETS score.
+        # ---------------------------------------------------------
 
         best_node = None
         best_score = float("-inf")
@@ -462,9 +565,9 @@ def ahdets_schedule(tasks, nodes, weights=None):
                 best_score = score
                 best_node = candidate["node"]
 
-        # -----------------------------------------------------
-        # Assign task
-        # -----------------------------------------------------
+        # ---------------------------------------------------------
+        # Assign task.
+        # ---------------------------------------------------------
 
         execution_time = best_node.execution_time(
             task.length
@@ -483,7 +586,10 @@ def ahdets_schedule(tasks, nodes, weights=None):
             (task.task_id, best_node.node_id)
         )
 
-        # Update local node state
+        # ---------------------------------------------------------
+        # Update local node state.
+        # ---------------------------------------------------------
+
         best_node.available_time = finish_time
 
         best_node.busy_time += execution_time
