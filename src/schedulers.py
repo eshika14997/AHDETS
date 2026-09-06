@@ -251,87 +251,112 @@ def calculate_adaptive_weights(nodes):
 
     return weights
 
-def ahdets_schedule(
-    tasks: List[Task],
-    nodes: List[EdgeNode],
-    current_time: float = 0.0,
-    weights=None
-) -> List[Tuple[int, int]]:
+def ahdets_schedule(tasks, nodes, weights=None):
+    """
+    AHDETS scheduling with adaptive weights.
 
-    if weights is None:
-        weights = calculate_adaptive_weights(nodes)
+    The scheduler maintains a local estimate of node state so that
+    weights and priorities can adapt as tasks are assigned.
+    """
 
-    node_available = {
-        node.node_id: node.available_time
-        for node in nodes
-    }
+    import copy
+
+    working_nodes = copy.deepcopy(nodes)
 
     assignments = []
 
-    # Schedule tasks in arrival order
-    ordered_tasks = sorted(tasks, key=lambda task: task.arrival_time)
+    # Process tasks in arrival order
+    sorted_tasks = sorted(
+        tasks,
+        key=lambda task: task.arrival_time
+    )
 
-    for task in ordered_tasks:
+    for task in sorted_tasks:
+
+        # Current scheduling time
+        current_time = max(
+            task.arrival_time,
+            min(node.available_time for node in working_nodes)
+        )
+
+        # Recalculate adaptive weights using current node state
+        adaptive_weights = calculate_adaptive_weights(
+            working_nodes
+        )
 
         best_node = None
-        best_priority = float("-inf")
+        best_score = float("-inf")
 
-        for node in nodes:
+        for node in working_nodes:
 
-            # 1. Deadline urgency
-            time_to_deadline = max(
+            execution_time = node.execution_time(
+                task.length
+            )
+
+            # Deadline urgency
+            remaining_time = max(
                 task.deadline - current_time,
                 0.001
             )
 
-            deadline_factor = 1.0 / time_to_deadline
+            deadline_urgency = 1.0 / remaining_time
 
-            # 2. Execution speed
-            execution_time = node.execution_time(task.length)
-
+            # Faster nodes get higher score
             execution_factor = 1.0 / max(
                 execution_time,
                 0.001
             )
 
-            # 3. Spare capacity
-            utilization = node.utilization(current_time)
+            # Spare capacity
+            utilization = node.utilization(
+                max(current_time, 0.001)
+            )
 
-            capacity_factor = 1.0 - utilization
+            spare_capacity = 1.0 - utilization
 
-            # 4. Residual energy
-            energy_factor = (
+            # Residual energy
+            residual_energy = (
                 node.energy / node.initial_energy
                 if node.initial_energy > 0
                 else 0.0
             )
 
-            # AHDETS priority
-            priority = (
-                weights["deadline"] * deadline_factor
-                + weights["execution"] * execution_factor
-                + weights["capacity"] * capacity_factor
-                + weights["energy"] * energy_factor
+            score = (
+                adaptive_weights["deadline"] * deadline_urgency
+                + adaptive_weights["execution"] * execution_factor
+                + adaptive_weights["capacity"] * spare_capacity
+                + adaptive_weights["energy"] * residual_energy
             )
 
-            if priority > best_priority:
-                best_priority = priority
+            # Prefer the node with the highest score
+            if score > best_score:
+                best_score = score
                 best_node = node
+
+        # Assign task
+        execution_time = best_node.execution_time(
+            task.length
+        )
+
+        start_time = max(
+            task.arrival_time,
+            best_node.available_time
+        )
+
+        finish_time = start_time + execution_time
 
         assignments.append(
             (task.task_id, best_node.node_id)
         )
 
-        # Update estimated node availability
-        execution_time = best_node.execution_time(task.length)
+        # Update local node state
+        best_node.available_time = finish_time
+        best_node.busy_time += execution_time
+        best_node.total_tasks += 1
 
-        start_time = max(
-            task.arrival_time,
-            node_available[best_node.node_id]
-        )
-
-        node_available[best_node.node_id] = (
-            start_time + execution_time
+        best_node.consume_energy(
+            execution_time,
+            1.0
         )
 
     return assignments
