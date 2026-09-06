@@ -255,17 +255,18 @@ def ahdets_schedule(tasks, nodes, weights=None):
     """
     AHDETS scheduling with adaptive weights.
 
-    The scheduler maintains a local estimate of node state so that
-    weights and priorities can adapt as tasks are assigned.
+    Considers:
+    1. Deadline urgency
+    2. Execution efficiency
+    3. Spare capacity
+    4. Residual energy
     """
 
     import copy
 
     working_nodes = copy.deepcopy(nodes)
-
     assignments = []
 
-    # Process tasks in arrival order
     sorted_tasks = sorted(
         tasks,
         key=lambda task: task.arrival_time
@@ -273,67 +274,159 @@ def ahdets_schedule(tasks, nodes, weights=None):
 
     for task in sorted_tasks:
 
-        # Current scheduling time
-        current_time = max(
-            task.arrival_time,
-            min(node.available_time for node in working_nodes)
-        )
+        if weights is None:
+            adaptive_weights = calculate_adaptive_weights(
+                working_nodes
+            )
+        else:
+            adaptive_weights = weights
 
-        # Recalculate adaptive weights using current node state
-        adaptive_weights = calculate_adaptive_weights(
-            working_nodes
-        )
-
-        best_node = None
-        best_score = float("-inf")
+        candidates = []
 
         for node in working_nodes:
 
+            # Time required by this node
             execution_time = node.execution_time(
                 task.length
             )
 
-            # Deadline urgency
-            remaining_time = max(
-                task.deadline - current_time,
-                0.001
+            # When this node can start the task
+            start_time = max(
+                task.arrival_time,
+                node.available_time
             )
 
-            deadline_urgency = 1.0 / remaining_time
-
-            # Faster nodes get higher score
-            execution_factor = 1.0 / max(
-                execution_time,
-                0.001
+            # Predicted completion time
+            predicted_finish = (
+                start_time + execution_time
             )
 
-            # Spare capacity
+            # -------------------------------------------------
+            # 1. Deadline factor
+            # -------------------------------------------------
+
+            deadline_slack = (
+                task.deadline - predicted_finish
+            )
+
+            if deadline_slack >= 0:
+                deadline_factor = (
+                    1.0 /
+                    (1.0 + deadline_slack)
+                )
+            else:
+                deadline_factor = (
+                    1.0 /
+                    (1.0 + abs(deadline_slack))
+                )
+
+            # -------------------------------------------------
+            # 2. Execution efficiency
+            # -------------------------------------------------
+
+            execution_factor = (
+                1.0 /
+                max(execution_time, 0.001)
+            )
+
+            # -------------------------------------------------
+            # 3. Spare capacity
+            # -------------------------------------------------
+
             utilization = node.utilization(
-                max(current_time, 0.001)
+                max(start_time, 0.001)
             )
 
             spare_capacity = 1.0 - utilization
 
-            # Residual energy
-            residual_energy = (
-                node.energy / node.initial_energy
-                if node.initial_energy > 0
-                else 0.0
-            )
+            # -------------------------------------------------
+            # 4. Residual energy
+            # -------------------------------------------------
+
+            if node.initial_energy > 0:
+                residual_energy = (
+                    node.energy /
+                    node.initial_energy
+                )
+            else:
+                residual_energy = 0.0
+
+            candidates.append({
+                "node": node,
+                "deadline": deadline_factor,
+                "execution": execution_factor,
+                "capacity": spare_capacity,
+                "energy": residual_energy
+            })
+
+        # -----------------------------------------------------
+        # Normalize factors across candidate nodes
+        # -----------------------------------------------------
+
+        for factor in [
+            "deadline",
+            "execution",
+            "capacity",
+            "energy"
+        ]:
+
+            values = [
+                candidate[factor]
+                for candidate in candidates
+            ]
+
+            min_value = min(values)
+            max_value = max(values)
+
+            if max_value == min_value:
+
+                for candidate in candidates:
+                    candidate[
+                        f"{factor}_normalized"
+                    ] = 1.0
+
+            else:
+
+                for candidate in candidates:
+                    candidate[
+                        f"{factor}_normalized"
+                    ] = (
+                        candidate[factor] - min_value
+                    ) / (
+                        max_value - min_value
+                    )
+
+        # -----------------------------------------------------
+        # Calculate weighted AHDETS score
+        # -----------------------------------------------------
+
+        best_node = None
+        best_score = float("-inf")
+
+        for candidate in candidates:
 
             score = (
-                adaptive_weights["deadline"] * deadline_urgency
-                + adaptive_weights["execution"] * execution_factor
-                + adaptive_weights["capacity"] * spare_capacity
-                + adaptive_weights["energy"] * residual_energy
+                adaptive_weights["deadline"]
+                * candidate["deadline_normalized"]
+
+                + adaptive_weights["execution"]
+                * candidate["execution_normalized"]
+
+                + adaptive_weights["capacity"]
+                * candidate["capacity_normalized"]
+
+                + adaptive_weights["energy"]
+                * candidate["energy_normalized"]
             )
 
-            # Prefer the node with the highest score
             if score > best_score:
                 best_score = score
-                best_node = node
+                best_node = candidate["node"]
 
+        # -----------------------------------------------------
         # Assign task
+        # -----------------------------------------------------
+
         execution_time = best_node.execution_time(
             task.length
         )
@@ -343,7 +436,9 @@ def ahdets_schedule(tasks, nodes, weights=None):
             best_node.available_time
         )
 
-        finish_time = start_time + execution_time
+        finish_time = (
+            start_time + execution_time
+        )
 
         assignments.append(
             (task.task_id, best_node.node_id)
@@ -351,7 +446,9 @@ def ahdets_schedule(tasks, nodes, weights=None):
 
         # Update local node state
         best_node.available_time = finish_time
+
         best_node.busy_time += execution_time
+
         best_node.total_tasks += 1
 
         best_node.consume_energy(
