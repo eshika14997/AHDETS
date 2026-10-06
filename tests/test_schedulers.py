@@ -345,3 +345,22 @@ def test_high_utilization_increases_capacity_weight():
     weights = calculate_adaptive_weights(nodes)
 
     assert weights["capacity"] > 0.20
+
+def test_sjf_does_not_use_future_arrivals():
+    nodes = create_edge_nodes()
+    tasks = [
+        Task(task_id=1, arrival_time=0.0, length=1500, deadline=10.0),
+        Task(task_id=2, arrival_time=1.0, length=50, deadline=10.0),
+    ]
+    assignments = sjf_schedule(tasks, nodes)
+    assert assignments[0][0] == 1
+
+
+def test_edf_does_not_use_future_arrivals():
+    nodes = create_edge_nodes()
+    tasks = [
+        Task(task_id=1, arrival_time=0.0, length=500, deadline=20.0),
+        Task(task_id=2, arrival_time=1.0, length=500, deadline=2.0),
+    ]
+    assignments = edf_schedule(tasks, nodes)
+    assert assignments[0][0] == 1

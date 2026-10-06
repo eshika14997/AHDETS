@@ -1,604 +1,309 @@
-from typing import List, Tuple
+"""Online scheduling policies for the AHDETS simulation.
 
-from src.models import Task, EdgeNode
+All schedulers make decisions only from tasks that have arrived by the
+current simulation time.  The returned assignment list is in dispatch
+order and can therefore be replayed by :class:`src.simulator.Simulator`.
+"""
+
+from copy import deepcopy
+from typing import Iterable, List, Optional, Set, Tuple
+
+from src.models import EdgeNode, Task
+
+VALID_FACTORS = {"deadline", "execution", "capacity", "energy"}
+BASE_WEIGHTS = {
+    "deadline": 0.40,
+    "execution": 0.25,
+    "capacity": 0.20,
+    "energy": 0.15,
+}
+ENERGY_THRESHOLD = 0.30
+UTILIZATION_THRESHOLD = 0.80
+ADAPTATION_STEP = 0.15
 
 
-def fcfs_schedule(
+def _reset_working_nodes(nodes: List[EdgeNode]) -> List[EdgeNode]:
+    working = deepcopy(nodes)
+    for node in working:
+        node.available_time = 0.0
+        node.busy_time = 0.0
+        node.total_tasks = 0
+        node.energy = node.initial_energy
+    return working
+
+
+def _task_key(policy: str, task: Task):
+    if policy == "fcfs":
+        return (task.arrival_time, task.task_id)
+    if policy == "sjf":
+        return (task.length, task.arrival_time, task.task_id)
+    if policy == "edf":
+        return (task.deadline, task.arrival_time, task.task_id)
+    raise ValueError(f"Unknown policy: {policy}")
+
+
+def _reserve(task: Task, node: EdgeNode, current_time: float, energy_rate: float):
+    execution_time = node.execution_time(task.length)
+    start_time = max(current_time, task.arrival_time, node.available_time)
+    finish_time = start_time + execution_time
+
+    node.available_time = finish_time
+    node.busy_time += execution_time
+    node.total_tasks += 1
+    node.consume_energy(execution_time, energy_rate)
+    return finish_time
+
+
+def _online_baseline_schedule(
     tasks: List[Task],
-    nodes: List[EdgeNode]
+    nodes: List[EdgeNode],
+    policy: str,
+    energy_rate: float = 1.0,
 ) -> List[Tuple[int, int]]:
-    """
-    First Come, First Served scheduling.
-
-    Tasks are processed according to their arrival time.
-    Each task is assigned to the node that gives the
-    earliest possible completion time.
-
-    Returns
-    -------
-    list of (task_id, node_id)
-    """
-
-    # Sort tasks by arrival time.
-    ordered_tasks = sorted(
-        tasks,
-        key=lambda task: task.arrival_time
-    )
-
-    # Keep track of when each node becomes available.
-    node_available = {
-        node.node_id: node.available_time
-        for node in nodes
-    }
-
-    assignments = []
-
-    for task in ordered_tasks:
-
-        best_node = None
-        earliest_finish = float("inf")
-
-        for node in nodes:
-
-            execution_time = node.execution_time(
-                task.length
-            )
-
-            start_time = max(
-                task.arrival_time,
-                node_available[node.node_id]
-            )
-
-            finish_time = start_time + execution_time
-
-            if finish_time < earliest_finish:
-                earliest_finish = finish_time
-                best_node = node
-
-        # Assign the task to the selected node.
-        assignments.append(
-            (task.task_id, best_node.node_id)
-        )
-
-        # Update the temporary availability.
-        execution_time = best_node.execution_time(
-            task.length
-        )
-
-        start_time = max(
-            task.arrival_time,
-            node_available[best_node.node_id]
-        )
-
-        node_available[best_node.node_id] = (
-            start_time + execution_time
-        )
-
-    return assignments
-
-
-def sjf_schedule(
-    tasks: List[Task],
-    nodes: List[EdgeNode]
-) -> List[Tuple[int, int]]:
-    """
-    Shortest Job First scheduling.
-
-    Tasks are ordered by their computational length.
-    Each task is assigned to the node that gives the
-    earliest possible completion time.
-
-    Returns
-    -------
-    list of (task_id, node_id)
-    """
-
-    # Sort tasks from shortest to longest.
-    ordered_tasks = sorted(
-        tasks,
-        key=lambda task: task.length
-    )
-
-    # Track temporary node availability.
-    node_available = {
-        node.node_id: node.available_time
-        for node in nodes
-    }
-
-    assignments = []
-
-    for task in ordered_tasks:
-
-        best_node = None
-        earliest_finish = float("inf")
-
-        for node in nodes:
-
-            execution_time = node.execution_time(
-                task.length
-            )
-
-            start_time = max(
-                task.arrival_time,
-                node_available[node.node_id]
-            )
-
-            finish_time = start_time + execution_time
-
-            if finish_time < earliest_finish:
-                earliest_finish = finish_time
-                best_node = node
-
-        assignments.append(
-            (task.task_id, best_node.node_id)
-        )
-
-        # Update temporary node availability.
-        execution_time = best_node.execution_time(
-            task.length
-        )
-
-        start_time = max(
-            task.arrival_time,
-            node_available[best_node.node_id]
-        )
-
-        node_available[best_node.node_id] = (
-            start_time + execution_time
-        )
-
-    return assignments
-
-def edf_schedule(
-    tasks: List[Task],
-    nodes: List[EdgeNode]
-) -> List[Tuple[int, int]]:
-    ordered_tasks = sorted(tasks, key=lambda task: task.deadline)
-
-    node_available = {
-        node.node_id: node.available_time
-        for node in nodes
-    }
-
-    assignments = []
-
-    for task in ordered_tasks:
-        best_node = None
-        earliest_finish = float("inf")
-
-        for node in nodes:
-            execution_time = node.execution_time(task.length)
-
-            start_time = max(
-                task.arrival_time,
-                node_available[node.node_id]
-            )
-
-            finish_time = start_time + execution_time
-
-            if finish_time < earliest_finish:
-                earliest_finish = finish_time
-                best_node = node
-
-        assignments.append((task.task_id, best_node.node_id))
-
-        execution_time = best_node.execution_time(task.length)
-
-        start_time = max(
-            task.arrival_time,
-            node_available[best_node.node_id]
-        )
-
-        node_available[best_node.node_id] = start_time + execution_time
-
-    return assignments
-
-def calculate_adaptive_weights(nodes):
-    """
-    Calculate adaptive AHDETS weights based on
-    current average system energy and utilization.
-
-    Base weights:
-    - Deadline urgency: 0.40
-    - Execution efficiency: 0.25
-    - Spare capacity: 0.20
-    - Residual energy: 0.15
-
-    The weights are adjusted continuously:
-    - Higher utilization increases the importance of capacity.
-    - Lower residual energy increases the importance of energy.
-    """
-
+    """Work-conserving online FCFS/SJF/EDF dispatcher."""
     if not nodes:
         raise ValueError("At least one node is required.")
 
-    # Average residual energy
+    working = _reset_working_nodes(nodes)
+    pending: List[Task] = []
+    ordered_arrivals = sorted(tasks, key=lambda t: (t.arrival_time, t.task_id))
+    next_arrival = 0
+    current_time = 0.0
+    assignments: List[Tuple[int, int]] = []
+
+    while next_arrival < len(ordered_arrivals) or pending:
+        if not pending and next_arrival < len(ordered_arrivals):
+            current_time = max(current_time, ordered_arrivals[next_arrival].arrival_time)
+
+        while next_arrival < len(ordered_arrivals) and ordered_arrivals[next_arrival].arrival_time <= current_time + 1e-12:
+            pending.append(ordered_arrivals[next_arrival])
+            next_arrival += 1
+
+        idle_nodes = [node for node in working if node.available_time <= current_time + 1e-12]
+
+        if not idle_nodes:
+            next_free = min(node.available_time for node in working)
+            next_arrival_time = (
+                ordered_arrivals[next_arrival].arrival_time
+                if next_arrival < len(ordered_arrivals)
+                else float("inf")
+            )
+            current_time = min(next_free, next_arrival_time)
+            continue
+
+        if not pending:
+            continue
+
+        task = min(pending, key=lambda t: _task_key(policy, t))
+        pending.remove(task)
+
+        best_node = min(
+            idle_nodes,
+            key=lambda node: (
+                current_time + node.execution_time(task.length),
+                node.node_id,
+            ),
+        )
+        assignments.append((task.task_id, best_node.node_id))
+        _reserve(task, best_node, current_time, energy_rate)
+
+    return assignments
+
+
+def fcfs_schedule(tasks: List[Task], nodes: List[EdgeNode]) -> List[Tuple[int, int]]:
+    return _online_baseline_schedule(tasks, nodes, "fcfs")
+
+
+def sjf_schedule(tasks: List[Task], nodes: List[EdgeNode]) -> List[Tuple[int, int]]:
+    return _online_baseline_schedule(tasks, nodes, "sjf")
+
+
+def edf_schedule(tasks: List[Task], nodes: List[EdgeNode]) -> List[Tuple[int, int]]:
+    return _online_baseline_schedule(tasks, nodes, "edf")
+
+
+def calculate_adaptive_weights(nodes: List[EdgeNode], current_time: Optional[float] = None):
+    """Adapt AHDETS weights using the paper's energy/load thresholds.
+
+    The base weights are 0.40/0.25/0.20/0.15.  When mean residual energy
+    falls below 30%, energy receives an additional 0.15.  When mean
+    utilization exceeds 80%, spare capacity receives an additional 0.15.
+    The added weight is taken proportionally from deadline and execution,
+    then all weights are normalized.
+    """
+    if not nodes:
+        raise ValueError("At least one node is required.")
+
     energy_levels = [
-        node.energy / node.initial_energy
-        if node.initial_energy > 0 else 0.0
+        node.energy / node.initial_energy if node.initial_energy > 0 else 0.0
         for node in nodes
     ]
-
     average_energy = sum(energy_levels) / len(energy_levels)
 
-    # Average utilization
-    utilizations = [
-        node.utilization(node.available_time)
-        for node in nodes
-    ]
-
+    if current_time is None:
+        current_time = max((node.available_time for node in nodes), default=0.0)
+    utilizations = [node.utilization(current_time) for node in nodes]
     average_utilization = sum(utilizations) / len(utilizations)
 
-    # ---------------------------------------------------------
-    # Base weights
-    # ---------------------------------------------------------
+    weights = BASE_WEIGHTS.copy()
+    adjustment = 0.0
 
-    deadline_weight = 0.40
-    execution_weight = 0.25
-    capacity_weight = 0.20
-    energy_weight = 0.15
+    if average_energy < ENERGY_THRESHOLD:
+        weights["energy"] += ADAPTATION_STEP
+        adjustment += ADAPTATION_STEP
 
-    # ---------------------------------------------------------
-    # Adaptive adjustment
-    # ---------------------------------------------------------
+    if average_utilization > UTILIZATION_THRESHOLD:
+        weights["capacity"] += ADAPTATION_STEP
+        adjustment += ADAPTATION_STEP
 
-    # As utilization increases, give more importance
-    # to spare capacity.
-    capacity_adjustment = 0.15 * average_utilization
+    if adjustment:
+        deadline_take = adjustment * (BASE_WEIGHTS["deadline"] / (BASE_WEIGHTS["deadline"] + BASE_WEIGHTS["execution"]))
+        execution_take = adjustment - deadline_take
+        weights["deadline"] = max(0.0, weights["deadline"] - deadline_take)
+        weights["execution"] = max(0.0, weights["execution"] - execution_take)
 
-    # As energy decreases, give more importance
-    # to residual energy.
-    energy_adjustment = 0.15 * (1.0 - average_energy)
-
-    capacity_weight += capacity_adjustment
-    energy_weight += energy_adjustment
-
-    # Take the additional weight proportionally
-    # from deadline and execution factors.
-    total_adjustment = (
-        capacity_adjustment +
-        energy_adjustment
-    )
-
-    deadline_reduction = (
-        total_adjustment * 0.60
-    )
-
-    execution_reduction = (
-        total_adjustment * 0.40
-    )
-
-    deadline_weight -= deadline_reduction
-    execution_weight -= execution_reduction
-
-    # ---------------------------------------------------------
-    # Safety: prevent negative weights
-    # ---------------------------------------------------------
-
-    weights = {
-        "deadline": max(deadline_weight, 0.0),
-        "execution": max(execution_weight, 0.0),
-        "capacity": max(capacity_weight, 0.0),
-        "energy": max(energy_weight, 0.0)
-    }
-
-    # Normalize so weights sum exactly to 1
     total = sum(weights.values())
+    return {key: value / total for key, value in weights.items()}
 
-    for key in weights:
-        weights[key] /= total
 
-    return weights
+def _normalise(values):
+    low = min(values)
+    high = max(values)
+    if high - low <= 1e-12:
+        return [1.0] * len(values)
+    return [(value - low) / (high - low) for value in values]
+
+
+def _ahdets_pair_score(task, node, current_time, weights, energy_rate):
+    execution_time = node.execution_time(task.length)
+    predicted_finish = max(current_time, task.arrival_time, node.available_time) + execution_time
+
+    # Paper-defined urgency at the current scheduling time.
+    remaining_time = max(task.deadline - current_time, 1e-9)
+    deadline = 1.0 / remaining_time
+
+    execution = 1.0 / max(execution_time, 1e-9)
+
+    utilization = node.utilization(max(current_time, 1e-9))
+    capacity = 1.0 - utilization
+
+    energy = node.energy / node.initial_energy if node.initial_energy > 0 else 0.0
+
+    return predicted_finish, deadline, execution, capacity, energy
+
 
 def ahdets_schedule(
-    tasks,
-    nodes,
+    tasks: List[Task],
+    nodes: List[EdgeNode],
     weights=None,
-    enabled_factors=None
-):
-    """
-    AHDETS scheduling with adaptive weights.
-
-    Parameters
-    ----------
-    tasks : list of Task
-        Tasks to schedule.
-
-    nodes : list of EdgeNode
-        Available heterogeneous edge nodes.
-
-    weights : dict, optional
-        Fixed weights for the four AHDETS factors.
-        If None, adaptive weights are calculated.
-
-    enabled_factors : set/list/tuple, optional
-        Factors to include in the heuristic.
-
-        Valid factors:
-            "deadline"
-            "execution"
-            "capacity"
-            "energy"
-
-        If None, all four factors are enabled.
-
-    Returns
-    -------
-    list of (task_id, node_id)
-        Task-to-node assignments.
-    """
-
-    import copy
-
-    # -------------------------------------------------------------
-    # Default: all AHDETS factors enabled.
-    # -------------------------------------------------------------
+    enabled_factors: Optional[Iterable[str]] = None,
+    energy_rate: float = 1.0,
+) -> List[Tuple[int, int]]:
+    """Online AHDETS scheduling with optional factor ablation."""
+    if not nodes:
+        raise ValueError("At least one node is required.")
 
     if enabled_factors is None:
-        enabled_factors = {
-            "deadline",
-            "execution",
-            "capacity",
-            "energy"
-        }
+        enabled: Set[str] = set(VALID_FACTORS)
     else:
-        enabled_factors = set(enabled_factors)
+        enabled = set(enabled_factors)
 
-    valid_factors = {
-        "deadline",
-        "execution",
-        "capacity",
-        "energy"
-    }
+    invalid = enabled - VALID_FACTORS
+    if invalid:
+        raise ValueError(f"Invalid AHDETS factors: {invalid}")
+    if not enabled:
+        raise ValueError("At least one AHDETS factor must be enabled.")
 
-    invalid_factors = enabled_factors - valid_factors
+    working = _reset_working_nodes(nodes)
+    ordered_arrivals = sorted(tasks, key=lambda t: (t.arrival_time, t.task_id))
+    pending: List[Task] = []
+    next_arrival = 0
+    current_time = 0.0
+    assignments: List[Tuple[int, int]] = []
 
-    if invalid_factors:
-        raise ValueError(
-            f"Invalid AHDETS factors: {invalid_factors}"
-        )
+    while next_arrival < len(ordered_arrivals) or pending:
+        if not pending and next_arrival < len(ordered_arrivals):
+            current_time = max(current_time, ordered_arrivals[next_arrival].arrival_time)
 
-    if not enabled_factors:
-        raise ValueError(
-            "At least one AHDETS factor must be enabled."
-        )
+        while next_arrival < len(ordered_arrivals) and ordered_arrivals[next_arrival].arrival_time <= current_time + 1e-12:
+            pending.append(ordered_arrivals[next_arrival])
+            next_arrival += 1
 
-    # -------------------------------------------------------------
-    # Work on a copy so the scheduler does not modify the
-    # original node state.
-    # -------------------------------------------------------------
+        idle_nodes = [node for node in working if node.available_time <= current_time + 1e-12]
+        if not idle_nodes:
+            next_free = min(node.available_time for node in working)
+            next_arrival_time = ordered_arrivals[next_arrival].arrival_time if next_arrival < len(ordered_arrivals) else float("inf")
+            current_time = min(next_free, next_arrival_time)
+            continue
+        if not pending:
+            continue
 
-    working_nodes = copy.deepcopy(nodes)
+        adaptive = calculate_adaptive_weights(working, current_time) if weights is None else dict(weights)
+        for factor in VALID_FACTORS - enabled:
+            adaptive[factor] = 0.0
+        total = sum(adaptive.values())
+        if total <= 0:
+            raise ValueError("Enabled AHDETS factors have zero total weight.")
+        adaptive = {key: value / total for key, value in adaptive.items()}
 
-    assignments = []
-
-    sorted_tasks = sorted(
-        tasks,
-        key=lambda task: task.arrival_time
-    )
-
-    # -------------------------------------------------------------
-    # Schedule tasks.
-    # -------------------------------------------------------------
-
-    for task in sorted_tasks:
-
-        # ---------------------------------------------------------
-        # Calculate adaptive weights.
-        # ---------------------------------------------------------
-
-        if weights is None:
-            adaptive_weights = calculate_adaptive_weights(
-                working_nodes
-            )
-        else:
-            adaptive_weights = weights.copy()
-
-        # ---------------------------------------------------------
-        # Disable weights for factors excluded from the ablation.
-        # ---------------------------------------------------------
-
-        for factor in valid_factors - enabled_factors:
-            adaptive_weights[factor] = 0.0
-
-        # ---------------------------------------------------------
-        # Renormalize remaining weights so they sum to 1.
-        # ---------------------------------------------------------
-
-        weight_total = sum(adaptive_weights.values())
-
-        if weight_total <= 0:
-            raise ValueError(
-                "Enabled AHDETS factors have zero total weight."
-            )
-
-        for factor in adaptive_weights:
-            adaptive_weights[factor] /= weight_total
-
-        # ---------------------------------------------------------
-        # Calculate candidate-node factors.
-        # ---------------------------------------------------------
-
-        candidates = []
-
-        for node in working_nodes:
-
-            # -----------------------------------------------------
-            # Execution time
-            # -----------------------------------------------------
-
-            execution_time = node.execution_time(
-                task.length
-            )
-
-            # -----------------------------------------------------
-            # Start time
-            # -----------------------------------------------------
-
-            start_time = max(
-                task.arrival_time,
-                node.available_time
-            )
-
-            # -----------------------------------------------------
-            # Predicted finish time
-            # -----------------------------------------------------
-
-            predicted_finish = (
-                start_time + execution_time
-            )
-
-            # -----------------------------------------------------
-            # 1. Deadline urgency
-            # -----------------------------------------------------
-
-            deadline_slack = (
-                task.deadline - predicted_finish
-            )
-
-            if deadline_slack >= 0:
-                deadline_factor = (
-                    1.0 /
-                    (1.0 + deadline_slack)
+        # Score every pending-task / idle-node pair.  Nodes that can meet the
+        # deadline are preferred, exactly as specified by the algorithm.
+        pairs = []
+        feasible_pairs = []
+        for task in pending:
+            for node in idle_nodes:
+                predicted_finish, deadline, execution, capacity, energy = _ahdets_pair_score(
+                    task, node, current_time, adaptive, energy_rate
                 )
-            else:
-                deadline_factor = (
-                    1.0 /
-                    (1.0 + abs(deadline_slack))
-                )
+                pair = {
+                    "task": task,
+                    "node": node,
+                    "finish": predicted_finish,
+                    "deadline": deadline,
+                    "execution": execution,
+                    "capacity": capacity,
+                    "energy": energy,
+                }
+                pairs.append(pair)
+                if predicted_finish <= task.deadline + 1e-12 and node.energy + 1e-12 >= node.execution_time(task.length):
+                    feasible_pairs.append(pair)
 
-            # -----------------------------------------------------
-            # 2. Execution efficiency
-            # -----------------------------------------------------
+        energy_feasible_pairs = [
+            pair for pair in pairs
+            if pair["node"].energy + 1e-12 >= pair["node"].execution_time(pair["task"].length)
+        ]
+        if not energy_feasible_pairs:
+            # The workload should remain within the modeled energy budget.
+            # If a pathological state occurs, choose the pair with most residual energy.
+            energy_feasible_pairs = pairs
+        deadline_feasible_pairs = [
+            pair for pair in energy_feasible_pairs
+            if pair["finish"] <= pair["task"].deadline + 1e-12
+        ]
+        candidate_pairs = deadline_feasible_pairs if deadline_feasible_pairs else energy_feasible_pairs
+        if not candidate_pairs:
+            break
 
-            execution_factor = (
-                1.0 /
-                max(execution_time, 0.001)
-            )
+        scored = {}
+        for factor in ("deadline", "execution", "capacity", "energy"):
+            scored[factor] = _normalise([pair[factor] for pair in candidate_pairs])
 
-            # -----------------------------------------------------
-            # 3. Spare capacity
-            # -----------------------------------------------------
-
-            utilization = node.utilization(
-                max(start_time, 0.001)
-            )
-
-            spare_capacity = 1.0 - utilization
-
-            # -----------------------------------------------------
-            # 4. Residual energy
-            # -----------------------------------------------------
-
-            if node.initial_energy > 0:
-                residual_energy = (
-                    node.energy /
-                    node.initial_energy
-                )
-            else:
-                residual_energy = 0.0
-
-            candidates.append({
-                "node": node,
-                "deadline": deadline_factor,
-                "execution": execution_factor,
-                "capacity": spare_capacity,
-                "energy": residual_energy
-            })
-
-        # ---------------------------------------------------------
-        # Normalize each factor across candidate nodes.
-        # ---------------------------------------------------------
-
-        for factor in valid_factors:
-
-            values = [
-                candidate[factor]
-                for candidate in candidates
-            ]
-
-            min_value = min(values)
-            max_value = max(values)
-
-            if max_value == min_value:
-
-                for candidate in candidates:
-                    candidate[
-                        f"{factor}_normalized"
-                    ] = 1.0
-
-            else:
-
-                for candidate in candidates:
-                    candidate[
-                        f"{factor}_normalized"
-                    ] = (
-                        candidate[factor] - min_value
-                    ) / (
-                        max_value - min_value
-                    )
-
-        # ---------------------------------------------------------
-        # Calculate weighted AHDETS score.
-        # ---------------------------------------------------------
-
-        best_node = None
-        best_score = float("-inf")
-
-        for candidate in candidates:
-
-            score = (
-                adaptive_weights["deadline"]
-                * candidate["deadline_normalized"]
-
-                + adaptive_weights["execution"]
-                * candidate["execution_normalized"]
-
-                + adaptive_weights["capacity"]
-                * candidate["capacity_normalized"]
-
-                + adaptive_weights["energy"]
-                * candidate["energy_normalized"]
-            )
-
-            if score > best_score:
-                best_score = score
-                best_node = candidate["node"]
-
-        # ---------------------------------------------------------
-        # Assign task.
-        # ---------------------------------------------------------
-
-        execution_time = best_node.execution_time(
-            task.length
+        best_index = max(
+            range(len(candidate_pairs)),
+            key=lambda i: (
+                sum(adaptive[factor] * scored[factor][i] for factor in VALID_FACTORS),
+                -candidate_pairs[i]["finish"],
+                -candidate_pairs[i]["task"].deadline,
+                -candidate_pairs[i]["task"].task_id,
+                -candidate_pairs[i]["node"].node_id,
+            ),
         )
+        best = candidate_pairs[best_index]
+        task = best["task"]
+        node = best["node"]
 
-        start_time = max(
-            task.arrival_time,
-            best_node.available_time
-        )
-
-        finish_time = (
-            start_time + execution_time
-        )
-
-        assignments.append(
-            (task.task_id, best_node.node_id)
-        )
-
-        # ---------------------------------------------------------
-        # Update local node state.
-        # ---------------------------------------------------------
-
-        best_node.available_time = finish_time
-
-        best_node.busy_time += execution_time
-
-        best_node.total_tasks += 1
-
-        best_node.consume_energy(
-            execution_time,
-            1.0
-        )
+        pending.remove(task)
+        assignments.append((task.task_id, node.node_id))
+        _reserve(task, node, current_time, energy_rate)
 
     return assignments

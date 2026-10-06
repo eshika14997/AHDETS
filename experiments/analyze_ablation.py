@@ -1,9 +1,8 @@
-import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import wilcoxon
+from scipy.stats import t, wilcoxon
 
 
 INPUT_FILE = Path("results/raw/ablation_results.csv")
@@ -52,7 +51,7 @@ def confidence_interval(values):
     n = len(values)
 
     if n > 1:
-        margin = 1.96 * std / math.sqrt(n)
+        margin = t.ppf(0.975, n - 1) * std / np.sqrt(n)
         ci_lower = mean - margin
         ci_upper = mean + margin
     else:
@@ -146,6 +145,9 @@ def create_statistical_tests(df):
                     )
                 except ValueError:
                     statistic = np.nan
+                    p_value = 1.0
+
+                if np.isnan(p_value):
                     p_value = 1.0
 
                 mean_difference = np.mean(differences)

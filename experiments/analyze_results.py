@@ -36,11 +36,21 @@ def calculate_summary(data):
             mean = values.mean()
             std = values.std(ddof=1)
 
-            confidence_interval = stats.t.interval(
+            if std == 0:
+                confidence_interval = (mean, mean)
+            else:
+                confidence_interval = stats.t.interval(
                 0.95,
                 df=len(values) - 1,
                 loc=mean,
                 scale=stats.sem(values)
+            )
+
+# Keep bounded metrics within their valid range
+            if metric == "deadline_success_rate":
+                confidence_interval = (
+                    max(0.0, confidence_interval[0]),
+                    min(1.0, confidence_interval[1])
             )
 
             row[f"{metric}_mean"] = mean

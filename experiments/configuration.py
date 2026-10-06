@@ -1,16 +1,14 @@
-# Number of tasks for each experiment
-NUM_TASKS = 100
+# Number of tasks in each independent simulation run.
+NUM_TASKS = 1000
 
-# Workload arrival rates
-# Higher arrival rate = more frequent task arrivals
+# Arrival rates chosen from the actual aggregate cluster capacity.
+# With mean task length ~1025 MI and aggregate capacity 16,250 MIPS,
+# these correspond to approximately 19%, 76%, and 114% offered load.
 WORKLOADS = {
     "light": 3.0,
-    "moderate": 8.0,
-    "heavy": 15.0
+    "moderate": 12.0,
+    "heavy": 18.0,
 }
 
-# Number of independent simulation runs
 NUM_RUNS = 30
-
-# Random seed for reproducibility
 BASE_SEED = 42
