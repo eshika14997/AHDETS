@@ -26,6 +26,7 @@ class Simulator:
             node.available_time = 0.0
             node.busy_time = 0.0
             node.total_tasks = 0
+            node.energy_demand = 0.0
 
     def reset_tasks(self, tasks: List[Task]):
         """

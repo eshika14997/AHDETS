@@ -34,10 +34,27 @@ def total_energy_consumed(nodes: List[EdgeNode]) -> float:
     return sum(node.initial_energy - node.energy for node in nodes)
 
 
+def total_energy_demand(nodes: List[EdgeNode]) -> float:
+    """Energy required by all executed work, ignoring the per-node budget cap."""
+    return sum(node.energy_demand for node in nodes)
+
+
+def energy_overdraw(nodes: List[EdgeNode]) -> float:
+    """Energy demanded beyond each node's initial budget.
+
+    ``total_energy_consumed`` is capped at the budget because node energy is
+    clamped at zero.  A positive overdraw means the schedule kept running work
+    on nodes that had already exhausted their simulated energy.
+    """
+    return sum(max(0.0, node.energy_demand - node.initial_energy) for node in nodes)
+
+
 def calculate_metrics(tasks: List[Task], nodes: List[EdgeNode]) -> Dict[str, float]:
     return {
         "deadline_success_rate": deadline_success_rate(tasks),
         "average_response_time": average_response_time(tasks),
         "system_utilization": system_utilization(tasks, nodes),
         "total_energy_consumed": total_energy_consumed(nodes),
+        "total_energy_demand": total_energy_demand(nodes),
+        "energy_overdraw": energy_overdraw(nodes),
     }

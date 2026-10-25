@@ -28,6 +28,7 @@ def _reset_working_nodes(nodes: List[EdgeNode]) -> List[EdgeNode]:
         node.available_time = 0.0
         node.busy_time = 0.0
         node.total_tasks = 0
+        node.energy_demand = 0.0
         node.energy = node.initial_energy
     return working
 

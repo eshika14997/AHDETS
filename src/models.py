@@ -48,6 +48,8 @@ class EdgeNode:
     available_time: float = 0.0
     busy_time: float = 0.0
     total_tasks: int = 0
+    # Cumulative energy the executed work required, never clamped at zero.
+    energy_demand: float = 0.0
 
     def __post_init__(self):
         self.energy = self.initial_energy
@@ -76,4 +78,5 @@ class EdgeNode:
         Reduce node energy after executing a task.
         """
         energy_used = execution_time * energy_rate
+        self.energy_demand += energy_used
         self.energy = max(0.0, self.energy - energy_used)

@@ -52,6 +52,15 @@ AHDETS first prefers feasible task/node pairs whose predicted completion meets t
 
 Energy is a simplified simulation model: computation consumes energy at a fixed rate of one simulated energy unit per second of execution. It is not a measurement of physical hardware power consumption.
 
+### Interpreting the energy results
+
+Because energy is proportional to execution time, a slower node always costs more energy for the same task. Total energy is therefore driven by *which nodes* a scheduler picks. AHDETS spreads work evenly across nodes, which protects individual nodes from draining early but uses slower nodes more, so it does **not** reduce total energy. Under light load it consumes more total energy than the baselines (about 622 vs 395 units). Under moderate and heavy load the totals are roughly equal. AHDETS should be described as energy-*balancing*, not energy-saving.
+
+Node energy is clamped at zero, and FCFS/SJF/EDF do not check residual energy. Under light load they keep running work on the fastest nodes after those nodes' 100-unit budgets are exhausted. `total_energy_consumed` is capped at the budget, so it understates that demand. Two uncapped metrics are recorded alongside it, and `experiments/energy_audit.py` tabulates them:
+
+- `total_energy_demand`: energy the executed work required, with no cap.
+- `energy_overdraw`: demand beyond each node's initial budget (0 for AHDETS in every workload; about 84 units for the baselines under light load).
+
 ## Reproduce the experiments
 
 Create/activate a Python environment and install the dependencies:
@@ -73,6 +82,19 @@ Run the component ablation study:
 ```text
 python experiments/run_ablation.py
 python experiments/analyze_ablation.py
+```
+
+Audit the energy metric (needs the main benchmark output):
+
+```text
+python experiments/energy_audit.py
+```
+
+Optional load-sensitivity study and figures:
+
+```text
+python experiments/load_sensitivity.py
+python experiments/generate_load_sensitivity_figures.py
 ```
 
 Run the tests:
